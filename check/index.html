@@ -433,6 +433,7 @@ function run(core, ui) {
   function setCheckLabel() { H.check.textContent = (CFG.mode === "check" ? "Submit step " : "Check step ") + (S.step + 1); }
 
   function render() {
+    H.steps.hidden = !!ui.noStepBar;
     clear(H.steps);
     core.steps.forEach((st, i) => {
       const done = S.done || i < S.step || (i === S.step && S.solved);
@@ -669,6 +670,7 @@ const IDS = ["ind", "makes", "indrep", "repop", "polprom", "transc", "mrna", "tb
 const LABEL = { ind: "the inducer", makes: "the arrow from lacI to the repressor", indrep: "the arrow from the inducer to the repressor", repop: "the arrow from the repressor to the operator",
   polprom: "the arrow from RNA polymerase to the promoter", transc: "the transcription arrow", mrna: "the lac mRNA", tbgal: "the arrow to β-galactosidase", tperm: "the arrow to permease",
   ttac: "the arrow to transacetylase", bgal: "β-galactosidase", perm: "permease", tac: "transacetylase" };
+const ARROWS = ["makes", "indrep", "repop", "polprom", "transc", "tbgal", "tperm", "ttac"]; /* arrows start dotted (not answered); each is then solid (works) or solid with an X (does not) */
 const TAG = { ind: "NOINDUCER", indrep: "INDREP", repop: "REPOP", transc: "TRANS", mrna: "TRANS", bgal: "ENZ", perm: "ENZ", tac: "ENZ", makes: "ALWAYS", polprom: "ALWAYS", tbgal: "TRANSL", tperm: "TRANSL", ttac: "TRANSL" };
 function expected(g, lactose) {
   const a = M.analyse(Object.assign({}, g, { lactose }));
@@ -694,17 +696,17 @@ function note(id, got, g, lactose, a) {
   return "Crossed " + L + ": lac mRNA is made here, so it is translated.";
 }
 function judgeMarks(C, lactose, X) {
-  const marked = IDS.filter((id) => X && X[id]);
-  if (!marked.length) return [{ tag: "INC", note: "Click the arrows (or the inducer, the mRNA or an enzyme) that would not work. Click again to take a cross off." }];
+  const open = ARROWS.filter((id) => !(X && (X[id] === "on" || X[id] === "off")));
+  if (open.length) return [{ tag: "INC", note: "Every arrow is still dotted until you click it. Click an arrow once if it works (solid) and again if it does not (solid with an X). " + open.length + " of " + ARROWS.length + " arrows still dotted.", field: open[0] }];
   const E = expected(C.geno, lactose), fs = [];
   for (const id of IDS) {
     if (E.opt.has(id)) continue;
-    const got = !!X[id], want = E.req.has(id);
+    const got = ARROWS.includes(id) ? X[id] === "off" : !!X[id], want = E.req.has(id);
     if (got !== want) fs.push({ tag: TAG[id], field: id, note: note(id, got, C.geno, lactose, E.a) });
   }
   return fs;
 }
-function modelMarks(C, lactose, A) { A.x = {}; for (const id of expected(C.geno, lactose).show) A.x[id] = true; }
+function modelMarks(C, lactose, A) { A.x = {}; const sh = expected(C.geno, lactose).show; for (const id of IDS) { if (ARROWS.includes(id)) A.x[id] = sh.has(id) ? "off" : "on"; else if (sh.has(id)) A.x[id] = true; } }
 
 /* what the strain does in both conditions */
 function pattern(g) {
@@ -734,16 +736,16 @@ function explain(g, lactose) {
 }
 
 const steps = [
-  { name: "Cross out what fails",
+  { name: "Set the arrows",
     bits: { NOINDUCER: 1, INDREP: 2, REPOP: 4, TRANS: 8, ENZ: 16, ALWAYS: 32, TRANSL: 64 },
     judge: (C, A) => judgeMarks(C, C.lactose, A.x),
     model: (C, A) => modelMarks(C, C.lactose, A),
-    wrong: (C, A) => { A.x.makes = true; return "ALWAYS"; } },
-  { name: "Change the condition",
+    wrong: (C, A) => { A.x.makes = "off"; return "ALWAYS"; } },
+  { name: "Same strain, other condition",
     bits: { NOINDUCER: 1, INDREP: 2, REPOP: 4, TRANS: 8, ENZ: 16, ALWAYS: 32, TRANSL: 64 },
     judge: (C, A) => judgeMarks(C, !C.lactose, A.x),
     model: (C, A) => modelMarks(C, !C.lactose, A),
-    wrong: (C, A) => { A.x.polprom = true; return "ALWAYS"; } },
+    wrong: (C, A) => { A.x.polprom = "off"; return "ALWAYS"; } },
   { name: "Name the pattern",
     bits: { PAT_IND: 1, PAT_CONST: 2, PAT_NEVER: 4, DEAD: 8, NOMRNA: 16, MISSED: 32 },
     judge(C, A) {
@@ -792,7 +794,7 @@ function anchors() { // Klug Table 16.1 (haploid rows) and tutorial C3: enzyme m
     ["C3 strain 3 (Oc Z-) permease with lactose", M.analyse(Object.assign({}, full({ O: "c", Z: "-" }), { lactose: true })).working.permease ? 1 : 0, 1, 0],
   ];
 }
-return { id: "lac_explorer", prefix: "L", make, steps, cards, anchors, GENOS, IDS, LABEL, expected, pattern, enzTruth, explain, genoText, means, isWT, full, SUP, PATLABEL, ENZ, name };
+return { id: "lac_explorer", prefix: "L", make, steps, cards, anchors, GENOS, IDS, ARROWS, LABEL, expected, pattern, enzTruth, explain, genoText, means, isWT, full, SUP, PATLABEL, ENZ, name };
 })();
 /* CORE END */
 /* inlined from lac_builder/lac_render.js: do not edit here */
@@ -926,11 +928,18 @@ function figure(geno, lactose, X, opts) {
   if (o.answer) return wrap;
   const NS = K.NS, layer = document.createElementNS(NS, "g"), marks = document.createElementNS(NS, "g");
   svg.append(marks, layer);
-  for (const h of HITS) { h.at = null; h.node = null; }
+  for (const h of HITS) { h.at = null; h.node = null; h.path = null; }
   const draw = () => {
     while (marks.firstChild) marks.removeChild(marks.firstChild);
-    for (const h of HITS) if (X[h.id] && h.at) marks.append(xmark(h.at[0], h.at[1], h.kind === "item" ? 26 : h.kind === "mrna" ? 22 : 14));
-    for (const h of HITS) if (h.node) h.node.setAttribute("aria-pressed", X[h.id] ? "true" : "false");
+    for (const h of HITS) {
+      const arrow = h.kind === "arrow", on = arrow ? X[h.id] === "off" : !!X[h.id];
+      if (on && h.at) marks.append(xmark(h.at[0], h.at[1], h.kind === "item" ? 26 : h.kind === "mrna" ? 22 : 14));
+      if (arrow && h.path) { h.path.style.strokeDasharray = X[h.id] ? "none" : "2 7"; h.path.style.strokeLinecap = X[h.id] ? "" : "round"; h.path.style.opacity = X[h.id] ? "1" : ".7"; }
+      if (h.node) {
+        h.node.setAttribute("aria-pressed", on ? "true" : "false");
+        if (arrow) h.node.setAttribute("aria-label", C0.LABEL[h.id] + ": " + (X[h.id] === "off" ? "does not work (X)" : X[h.id] === "on" ? "works (solid)" : "not answered (dotted)"));
+      }
+    }
   };
   const order = (h) => (h.kind === "arrow" ? 0 : h.kind === "mrna" ? 1 : 2); /* parts sit above arrows, so a click near a part picks the part */
   for (const h of HITS.slice().sort((p, q) => order(p) - order(q))) {
@@ -939,7 +948,7 @@ function figure(geno, lactose, X, opts) {
       const g = svg.querySelector("#arrow-" + h.arrow), p = g && g.querySelector("path");
       if (!p) continue;
       const L = p.getTotalLength(), pt = p.getPointAtLength(L * 0.5);
-      at = [pt.x, pt.y];
+      at = [pt.x, pt.y]; h.path = p;
       node = document.createElementNS(NS, "path"); node.setAttribute("d", p.getAttribute("d")); node.setAttribute("class", "hit arrowhit");
     } else if (h.kind === "mrna") {
       const m = r.pos.mrna; at = [(m[0] + m[1]) / 2, m[2]];
@@ -950,9 +959,9 @@ function figure(geno, lactose, X, opts) {
     }
     h.at = at; h.node = node;
     node.setAttribute("tabindex", o.locked ? "-1" : "0"); node.setAttribute("role", "button");
-    node.setAttribute("aria-label", "Cross out " + C0.LABEL[h.id]);
+    node.setAttribute("aria-label", (h.kind === "arrow" ? "Set " : "Cross out ") + C0.LABEL[h.id]);
     if (o.flag && o.flag(h.id)) node.classList.add("flag");
-    const toggle = () => { if (o.locked) return; X[h.id] = !X[h.id]; if (!X[h.id]) delete X[h.id]; draw(); if (o.onChange) o.onChange(); };
+    const toggle = () => { if (o.locked) return; if (h.kind === "arrow") X[h.id] = X[h.id] === "on" ? "off" : "on"; else { X[h.id] = !X[h.id]; if (!X[h.id]) delete X[h.id]; } draw(); if (o.onChange) o.onChange(); };
     node.addEventListener("click", toggle);
     node.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
     layer.append(node);
@@ -970,10 +979,10 @@ function markStep(root, C, A, ctx, lactose) {
   A.x = A.x || {};
   const pan = el("div", { class: "panel" });
   pan.append(el("h2", null, "Working diagram"), genoBar(C.geno), el("div", { class: "lacbar" }, condPill(lactose),
-    el("span", { class: "note" }, "Click an arrow (or the inducer, the mRNA or an enzyme) to cross it out. Click again to take the cross off.")));
+    el("span", { class: "note" }, "Arrows start dotted. Click one: solid means it works. Click again: solid with an X means it does not work. Click the inducer, the mRNA or an enzyme to cross it out.")));
   pan.append(el("p", { class: "note swipe" }, "Swipe the diagram sideways to see all of it."), figure(C.geno, lactose, A.x, { locked: ctx.solved, flag: ctx.flag, onChange: () => ctx.change() }));
   if (!ctx.solved) {
-    const b = el("button", { class: "btn", type: "button" }, "Clear all crosses");
+    const b = el("button", { class: "btn", type: "button" }, "Reset (arrows back to dotted)");
     b.addEventListener("click", () => { for (const k of Object.keys(A.x)) delete A.x[k]; ctx.change(); ctx.rerender(); });
     pan.append(el("div", { class: "row" }, b));
   }
@@ -981,11 +990,12 @@ function markStep(root, C, A, ctx, lactose) {
 }
 
 return {
+  noStepBar: true,
   eyebrow: "BISC 202 · Week 11 · The lac operon",
   title: "lac operon: predict what fails",
   newLabel: "New strain",
   footer: ["Invented E. coli strains in the course's simplified model: one copy of the lac genes (no F′ plasmid), glucose absent, so catabolite repression is left out. Klug §16.2.",
-    "A cross means that step does not happen in this strain and condition."],
+    "Solid arrow: that step happens in this strain and condition. Arrow with an X: it does not. Dotted: not answered yet."],
   brief(C) {
     const m = C0.means(C.geno);
     return { q: "What does this strain do with the lac operon?",
@@ -993,10 +1003,10 @@ return {
       given: m.length ? m.join(" ") : "Wild type: the repressor, operator and all three genes work normally." };
   },
   steps: [
-    { task: (C) => (C.lactose ? "Lactose is present. " : "There is no lactose. ") + "Cross out every part of the working diagram that would not work or would not happen in this strain.",
+    { task: (C) => (C.lactose ? "Lactose is present. " : "There is no lactose. ") + "Set every arrow: solid if it works, with an X if it does not. Also cross out any inducer, mRNA or enzyme that is missing or does not work.",
       render: (root, C, A, ctx) => markStep(root, C, A, ctx, C.lactose),
       win: (C) => C0.explain(C.geno, C.lactose), winTitle: () => "Right: the diagram is marked correctly" },
-    { task: (C) => "Same strain, but now " + (C.lactose ? "there is no lactose" : "lactose is added") + ". Cross out what fails in this new condition.",
+    { task: (C) => "Same strain, but now " + (C.lactose ? "there is no lactose" : "lactose is added") + ". Set every arrow again for this new condition, and cross out what fails.",
       render: (root, C, A, ctx) => markStep(root, C, A, ctx, !C.lactose),
       win: (C) => C0.explain(C.geno, !C.lactose), winTitle: () => "Right: the other condition is marked" },
     { task: () => "You have now seen the strain with and without lactose. Name its pattern, then say which enzymes are active when lactose is present.",
@@ -1015,7 +1025,7 @@ return {
       winTitle: (C) => "Right: " + C0.pattern(C.geno) },
   ],
   doneTitle: "Strain solved",
-  doneText: (C) => "Cross out what fails, in each condition, then name the pattern. Try other strains below, or press “Try a new case”.",
+  doneText: (C) => "Set the arrows, in each condition, then name the pattern. Try other strains below, or press “Try a new case”.",
   done(root, C) {
     const st = { I: "+", O: "+", Z: "+", Y: "+", lactose: false };
     const pan = el("div", { class: "panel" }, el("h2", null, "Explore: make your own strain"),
